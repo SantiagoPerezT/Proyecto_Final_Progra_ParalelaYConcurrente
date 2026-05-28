@@ -1,18 +1,14 @@
 #include <iostream>
 #include <vector>
-#include <fstream>
-#include <cmath>
+#include <cstdlib>
 #include <chrono>
 #include <omp.h>
 
 using namespace std;
 
-// Resolucion 8K
-const int WIDTH  = 7680;
-const int HEIGHT = 4320;
-
-// Iteraciones Mandelbrot
-const int MAX_ITER = 1000;
+// Resolucion simulada
+const int WIDTH  = 4000;
+const int HEIGHT = 4000;
 
 // RGB
 struct Pixel
@@ -23,83 +19,79 @@ struct Pixel
 };
 
 // ------------------------------------------------------------
-// Guardar imagen PPM
+// Generar imagen aleatoria
 // ------------------------------------------------------------
-void savePPM(const string& filename,
-             const vector<Pixel>& image)
+void generateImage(vector<Pixel>& image)
 {
-    ofstream file(filename, ios::binary);
-
-    file << "P6\n"
-         << WIDTH << " "
-         << HEIGHT
-         << "\n255\n";
-
-    for (const auto& pixel : image)
+    #pragma omp parallel for
+    for (long long i = 0; i < image.size(); i++)
     {
-        file.write((char*)&pixel, 3);
+        image[i].r = rand() % 256;
+        image[i].g = rand() % 256;
+        image[i].b = rand() % 256;
     }
-
-    file.close();
 }
 
 // ------------------------------------------------------------
-// Generacion Mandelbrot con scheduler configurable
+// Histograma usando atomic
 // ------------------------------------------------------------
-void generateMandelbrot(vector<Pixel>& image,
-                        omp_sched_t schedulerType,
-                        int chunkSize,
-                        const string& schedulerName)
+void histogramAtomic(const vector<Pixel>& image,
+                     vector<int>& histogram)
 {
-    // Configurar scheduler
-    omp_set_schedule(schedulerType, chunkSize);
-
     auto start =
         chrono::high_resolution_clock::now();
 
-    // schedule(runtime) toma el scheduler configurado
-    #pragma omp parallel for schedule(runtime)
-    for (int y = 0; y < HEIGHT; y++)
+    #pragma omp parallel for
+    for (long long i = 0; i < image.size(); i++)
     {
-        for (int x = 0; x < WIDTH; x++)
+        int value = image[i].r;
+
+        // Exclusión mutua
+        #pragma omp atomic
+        histogram[value]++;
+    }
+
+    auto end =
+        chrono::high_resolution_clock::now();
+
+    double time =
+        chrono::duration<double>(end - start)
+        .count();
+
+    cout << "Tiempo Atomic: "
+         << time
+         << " segundos\n";
+}
+
+// ------------------------------------------------------------
+// Histograma usando variables privadas
+// ------------------------------------------------------------
+void histogramPrivate(const vector<Pixel>& image,
+                      vector<int>& histogram)
+{
+    auto start =
+        chrono::high_resolution_clock::now();
+
+    #pragma omp parallel
+    {
+        // Histograma privado por hilo
+        vector<int> localHist(256, 0);
+
+        #pragma omp for
+        for (long long i = 0; i < image.size(); i++)
         {
-            // Conversion al plano complejo
-            double real =
-                (x - WIDTH / 2.0) * 4.0 / WIDTH;
+            int value = image[i].r;
 
-            double imag =
-                (y - HEIGHT / 2.0) * 4.0 / WIDTH;
+            localHist[value]++;
+        }
 
-            double zr = 0.0;
-            double zi = 0.0;
-
-            int iter = 0;
-
-            // Formula Mandelbrot
-            while ((zr * zr + zi * zi <= 4.0) &&
-                    iter < MAX_ITER)
+        // Fusionar resultados
+        #pragma omp critical
+        {
+            for (int i = 0; i < 256; i++)
             {
-                double temp =
-                    zr * zr - zi * zi + real;
-
-                zi = 2.0 * zr * zi + imag;
-
-                zr = temp;
-
-                iter++;
+                histogram[i] += localHist[i];
             }
-
-            // Escala de grises
-            unsigned char color =
-                (unsigned char)
-                (255.0 * iter / MAX_ITER);
-
-            image[y * WIDTH + x] =
-            {
-                color,
-                color,
-                color
-            };
         }
     }
 
@@ -110,11 +102,7 @@ void generateMandelbrot(vector<Pixel>& image,
         chrono::duration<double>(end - start)
         .count();
 
-    cout << "Scheduler: "
-         << schedulerName
-         << " | Chunk: "
-         << chunkSize
-         << " | Tiempo: "
+    cout << "Tiempo Variables Privadas: "
          << time
          << " segundos\n";
 }
@@ -126,77 +114,19 @@ int main()
 {
     vector<Pixel> image(WIDTH * HEIGHT);
 
-    cout << "===== STATIC =====\n";
+    generateImage(image);
 
-    generateMandelbrot(
-        image,
-        omp_sched_static,
-        1,
-        "static"
-    );
+    vector<int> histogram1(256, 0);
 
-    generateMandelbrot(
-        image,
-        omp_sched_static,
-        16,
-        "static"
-    );
+    vector<int> histogram2(256, 0);
 
-    generateMandelbrot(
-        image,
-        omp_sched_static,
-        64,
-        "static"
-    );
+    cout << "===== HISTOGRAMA ATOMIC =====\n";
 
-    cout << "\n===== DYNAMIC =====\n";
+    histogramAtomic(image, histogram1);
 
-    generateMandelbrot(
-        image,
-        omp_sched_dynamic,
-        1,
-        "dynamic"
-    );
+    cout << "\n===== HISTOGRAMA PRIVADO =====\n";
 
-    generateMandelbrot(
-        image,
-        omp_sched_dynamic,
-        16,
-        "dynamic"
-    );
-
-    generateMandelbrot(
-        image,
-        omp_sched_dynamic,
-        64,
-        "dynamic"
-    );
-
-    cout << "\n===== GUIDED =====\n";
-
-    generateMandelbrot(
-        image,
-        omp_sched_guided,
-        1,
-        "guided"
-    );
-
-    generateMandelbrot(
-        image,
-        omp_sched_guided,
-        16,
-        "guided"
-    );
-
-    generateMandelbrot(
-        image,
-        omp_sched_guided,
-        64,
-        "guided"
-    );
-
-    // Guardar ultima imagen generada
-    savePPM("mandelbrot.ppm", image);
+    histogramPrivate(image, histogram2);
 
     return 0;
 }
