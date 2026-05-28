@@ -3,17 +3,18 @@
 #include <fstream>
 #include <cmath>
 #include <chrono>
+#include <omp.h>
 
 using namespace std;
 
-// Resolucion ultra HD (8K)
+// Resolucion 8K
 const int WIDTH  = 7680;
 const int HEIGHT = 4320;
 
-// Numero maximo de iteraciones Mandelbrot
+// Iteraciones maximas
 const int MAX_ITER = 1000;
 
-// Estructura RGB
+// RGB
 struct Pixel
 {
     unsigned char r;
@@ -22,7 +23,7 @@ struct Pixel
 };
 
 // ------------------------------------------------------------
-// Guardar imagen en formato PPM
+// Guardar imagen
 // ------------------------------------------------------------
 void savePPM(const string& filename,
              const vector<Pixel>& image)
@@ -43,18 +44,19 @@ void savePPM(const string& filename,
 }
 
 // ------------------------------------------------------------
-// Generar fractal Mandelbrot (SECUENCIAL)
+// Mandelbrot paralelo con OpenMP
 // ------------------------------------------------------------
 void generateMandelbrot(vector<Pixel>& image)
 {
     auto start =
         chrono::high_resolution_clock::now();
 
+    // Paralelizacion del bucle externo
+    #pragma omp parallel for
     for (int y = 0; y < HEIGHT; y++)
     {
         for (int x = 0; x < WIDTH; x++)
         {
-            // Conversion de pixeles al plano complejo
             double real =
                 (x - WIDTH / 2.0) * 4.0 / WIDTH;
 
@@ -66,7 +68,6 @@ void generateMandelbrot(vector<Pixel>& image)
 
             int iter = 0;
 
-            // Formula Mandelbrot
             while ((zr * zr + zi * zi <= 4.0) &&
                     iter < MAX_ITER)
             {
@@ -80,7 +81,6 @@ void generateMandelbrot(vector<Pixel>& image)
                 iter++;
             }
 
-            // Escala de grises
             unsigned char color =
                 (unsigned char)
                 (255.0 * iter / MAX_ITER);
@@ -101,18 +101,17 @@ void generateMandelbrot(vector<Pixel>& image)
         chrono::duration<double>(end - start)
         .count();
 
-    cout << "Tiempo Mandelbrot: "
+    cout << "Tiempo Mandelbrot OpenMP: "
          << time
          << " segundos\n";
 }
 
 // ------------------------------------------------------------
-// Aplicar filtro Gaussiano pesado
+// Convolucion Gaussiana paralela
 // ------------------------------------------------------------
 void gaussianBlur(const vector<Pixel>& input,
                   vector<Pixel>& output)
 {
-    // Radio grande = convolucion pesada
     const int radius = 5;
 
     const int kernelSize =
@@ -124,7 +123,7 @@ void gaussianBlur(const vector<Pixel>& input,
 
     float sum = 0.0f;
 
-    // Crear kernel gaussiano
+    // Crear kernel
     for (int y = -radius; y <= radius; y++)
     {
         for (int x = -radius; x <= radius; x++)
@@ -140,7 +139,7 @@ void gaussianBlur(const vector<Pixel>& input,
         }
     }
 
-    // Normalizar kernel
+    // Normalizar
     for (int y = 0; y < kernelSize; y++)
     {
         for (int x = 0; x < kernelSize; x++)
@@ -152,7 +151,8 @@ void gaussianBlur(const vector<Pixel>& input,
     auto start =
         chrono::high_resolution_clock::now();
 
-    // Aplicar convolucion
+    // Paralelizacion del blur
+    #pragma omp parallel for
     for (int y = radius;
          y < HEIGHT - radius;
          y++)
@@ -165,7 +165,6 @@ void gaussianBlur(const vector<Pixel>& input,
             float g = 0.0f;
             float b = 0.0f;
 
-            // Recorrer kernel
             for (int ky = -radius;
                  ky <= radius;
                  ky++)
@@ -204,7 +203,7 @@ void gaussianBlur(const vector<Pixel>& input,
         chrono::duration<double>(end - start)
         .count();
 
-    cout << "Tiempo Convolucion: "
+    cout << "Tiempo Convolucion OpenMP: "
          << time
          << " segundos\n";
 }
@@ -214,10 +213,8 @@ void gaussianBlur(const vector<Pixel>& input,
 // ------------------------------------------------------------
 int main()
 {
-    // Imagen original
     vector<Pixel> image(WIDTH * HEIGHT);
 
-    // Imagen procesada
     vector<Pixel> blurred(WIDTH * HEIGHT);
 
     cout << "Generando Mandelbrot...\n";
@@ -230,7 +227,7 @@ int main()
 
     cout << "Guardando imagen...\n";
 
-    savePPM("mandelbrot.ppm", blurred);
+    savePPM("mandelbrot_openmp.ppm", blurred);
 
     cout << "Proceso terminado\n";
 
