@@ -1,14 +1,15 @@
 #include <iostream>
 #include <vector>
-#include <cstdlib>
+#include <fstream>
+#include <cmath>
 #include <chrono>
 #include <omp.h>
 
 using namespace std;
 
-// Resolucion simulada
-const int WIDTH  = 4000;
-const int HEIGHT = 4000;
+// Resolucion
+const int WIDTH  = 3840;
+const int HEIGHT = 2160;
 
 // RGB
 struct Pixel
@@ -19,7 +20,7 @@ struct Pixel
 };
 
 // ------------------------------------------------------------
-// Generar imagen aleatoria
+// Generar imagen de prueba
 // ------------------------------------------------------------
 void generateImage(vector<Pixel>& image)
 {
@@ -33,65 +34,94 @@ void generateImage(vector<Pixel>& image)
 }
 
 // ------------------------------------------------------------
-// Histograma usando atomic
+// Filtro Gaussiano usando SIMD
 // ------------------------------------------------------------
-void histogramAtomic(const vector<Pixel>& image,
-                     vector<int>& histogram)
+void gaussianBlurSIMD(const vector<Pixel>& input,
+                      vector<Pixel>& output)
 {
+    const int radius = 5;
+
+    const int kernelSize =
+        radius * 2 + 1;
+
+    float kernel[11][11];
+
+    float sigma = 5.0f;
+
+    float sum = 0.0f;
+
+    // Crear kernel
+    for (int y = -radius; y <= radius; y++)
+    {
+        for (int x = -radius; x <= radius; x++)
+        {
+            float value =
+                exp(-(x*x + y*y)
+                / (2 * sigma * sigma));
+
+            kernel[y + radius][x + radius]
+                = value;
+
+            sum += value;
+        }
+    }
+
+    // Normalizar kernel
+    for (int y = 0; y < kernelSize; y++)
+    {
+        for (int x = 0; x < kernelSize; x++)
+        {
+            kernel[y][x] /= sum;
+        }
+    }
+
     auto start =
         chrono::high_resolution_clock::now();
 
+    // SPMD
     #pragma omp parallel for
-    for (long long i = 0; i < image.size(); i++)
+    for (int y = radius;
+         y < HEIGHT - radius;
+         y++)
     {
-        int value = image[i].r;
-
-        // Exclusión mutua
-        #pragma omp atomic
-        histogram[value]++;
-    }
-
-    auto end =
-        chrono::high_resolution_clock::now();
-
-    double time =
-        chrono::duration<double>(end - start)
-        .count();
-
-    cout << "Tiempo Atomic: "
-         << time
-         << " segundos\n";
-}
-
-// ------------------------------------------------------------
-// Histograma usando variables privadas
-// ------------------------------------------------------------
-void histogramPrivate(const vector<Pixel>& image,
-                      vector<int>& histogram)
-{
-    auto start =
-        chrono::high_resolution_clock::now();
-
-    #pragma omp parallel
-    {
-        // Histograma privado por hilo
-        vector<int> localHist(256, 0);
-
-        #pragma omp for
-        for (long long i = 0; i < image.size(); i++)
+        for (int x = radius;
+             x < WIDTH - radius;
+             x++)
         {
-            int value = image[i].r;
+            float r = 0.0f;
+            float g = 0.0f;
+            float b = 0.0f;
 
-            localHist[value]++;
-        }
-
-        // Fusionar resultados
-        #pragma omp critical
-        {
-            for (int i = 0; i < 256; i++)
+            // SIMD
+            #pragma omp simd reduction(+:r,g,b)
+            for (int ky = -radius;
+                 ky <= radius;
+                 ky++)
             {
-                histogram[i] += localHist[i];
+                for (int kx = -radius;
+                     kx <= radius;
+                     kx++)
+                {
+                    Pixel p =
+                        input[(y + ky)
+                        * WIDTH + (x + kx)];
+
+                    float weight =
+                        kernel[ky + radius]
+                              [kx + radius];
+
+                    r += p.r * weight;
+                    g += p.g * weight;
+                    b += p.b * weight;
+                }
             }
+
+            output[y * WIDTH + x] =
+            {
+                (unsigned char)r,
+                (unsigned char)g,
+                (unsigned char)b
+            };
         }
     }
 
@@ -102,7 +132,7 @@ void histogramPrivate(const vector<Pixel>& image,
         chrono::duration<double>(end - start)
         .count();
 
-    cout << "Tiempo Variables Privadas: "
+    cout << "Tiempo SIMD: "
          << time
          << " segundos\n";
 }
@@ -114,19 +144,11 @@ int main()
 {
     vector<Pixel> image(WIDTH * HEIGHT);
 
+    vector<Pixel> blurred(WIDTH * HEIGHT);
+
     generateImage(image);
 
-    vector<int> histogram1(256, 0);
-
-    vector<int> histogram2(256, 0);
-
-    cout << "===== HISTOGRAMA ATOMIC =====\n";
-
-    histogramAtomic(image, histogram1);
-
-    cout << "\n===== HISTOGRAMA PRIVADO =====\n";
-
-    histogramPrivate(image, histogram2);
+    gaussianBlurSIMD(image, blurred);
 
     return 0;
 }
