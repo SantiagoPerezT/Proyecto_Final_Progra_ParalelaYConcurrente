@@ -11,7 +11,7 @@ using namespace std;
 const int WIDTH  = 7680;
 const int HEIGHT = 4320;
 
-// Iteraciones maximas
+// Iteraciones Mandelbrot
 const int MAX_ITER = 1000;
 
 // RGB
@@ -23,7 +23,7 @@ struct Pixel
 };
 
 // ------------------------------------------------------------
-// Guardar imagen
+// Guardar imagen PPM
 // ------------------------------------------------------------
 void savePPM(const string& filename,
              const vector<Pixel>& image)
@@ -44,19 +44,26 @@ void savePPM(const string& filename,
 }
 
 // ------------------------------------------------------------
-// Mandelbrot paralelo con OpenMP
+// Generacion Mandelbrot con scheduler configurable
 // ------------------------------------------------------------
-void generateMandelbrot(vector<Pixel>& image)
+void generateMandelbrot(vector<Pixel>& image,
+                        omp_sched_t schedulerType,
+                        int chunkSize,
+                        const string& schedulerName)
 {
+    // Configurar scheduler
+    omp_set_schedule(schedulerType, chunkSize);
+
     auto start =
         chrono::high_resolution_clock::now();
 
-    // Paralelizacion del bucle externo
-    #pragma omp parallel for
+    // schedule(runtime) toma el scheduler configurado
+    #pragma omp parallel for schedule(runtime)
     for (int y = 0; y < HEIGHT; y++)
     {
         for (int x = 0; x < WIDTH; x++)
         {
+            // Conversion al plano complejo
             double real =
                 (x - WIDTH / 2.0) * 4.0 / WIDTH;
 
@@ -68,6 +75,7 @@ void generateMandelbrot(vector<Pixel>& image)
 
             int iter = 0;
 
+            // Formula Mandelbrot
             while ((zr * zr + zi * zi <= 4.0) &&
                     iter < MAX_ITER)
             {
@@ -81,6 +89,7 @@ void generateMandelbrot(vector<Pixel>& image)
                 iter++;
             }
 
+            // Escala de grises
             unsigned char color =
                 (unsigned char)
                 (255.0 * iter / MAX_ITER);
@@ -101,109 +110,11 @@ void generateMandelbrot(vector<Pixel>& image)
         chrono::duration<double>(end - start)
         .count();
 
-    cout << "Tiempo Mandelbrot OpenMP: "
-         << time
-         << " segundos\n";
-}
-
-// ------------------------------------------------------------
-// Convolucion Gaussiana paralela
-// ------------------------------------------------------------
-void gaussianBlur(const vector<Pixel>& input,
-                  vector<Pixel>& output)
-{
-    const int radius = 5;
-
-    const int kernelSize =
-        radius * 2 + 1;
-
-    float kernel[11][11];
-
-    float sigma = 5.0f;
-
-    float sum = 0.0f;
-
-    // Crear kernel
-    for (int y = -radius; y <= radius; y++)
-    {
-        for (int x = -radius; x <= radius; x++)
-        {
-            float value =
-                exp(-(x*x + y*y)
-                / (2 * sigma * sigma));
-
-            kernel[y + radius][x + radius]
-                = value;
-
-            sum += value;
-        }
-    }
-
-    // Normalizar
-    for (int y = 0; y < kernelSize; y++)
-    {
-        for (int x = 0; x < kernelSize; x++)
-        {
-            kernel[y][x] /= sum;
-        }
-    }
-
-    auto start =
-        chrono::high_resolution_clock::now();
-
-    // Paralelizacion del blur
-    #pragma omp parallel for
-    for (int y = radius;
-         y < HEIGHT - radius;
-         y++)
-    {
-        for (int x = radius;
-             x < WIDTH - radius;
-             x++)
-        {
-            float r = 0.0f;
-            float g = 0.0f;
-            float b = 0.0f;
-
-            for (int ky = -radius;
-                 ky <= radius;
-                 ky++)
-            {
-                for (int kx = -radius;
-                     kx <= radius;
-                     kx++)
-                {
-                    Pixel p =
-                        input[(y + ky)
-                        * WIDTH + (x + kx)];
-
-                    float weight =
-                        kernel[ky + radius]
-                              [kx + radius];
-
-                    r += p.r * weight;
-                    g += p.g * weight;
-                    b += p.b * weight;
-                }
-            }
-
-            output[y * WIDTH + x] =
-            {
-                (unsigned char)r,
-                (unsigned char)g,
-                (unsigned char)b
-            };
-        }
-    }
-
-    auto end =
-        chrono::high_resolution_clock::now();
-
-    double time =
-        chrono::duration<double>(end - start)
-        .count();
-
-    cout << "Tiempo Convolucion OpenMP: "
+    cout << "Scheduler: "
+         << schedulerName
+         << " | Chunk: "
+         << chunkSize
+         << " | Tiempo: "
          << time
          << " segundos\n";
 }
@@ -215,21 +126,77 @@ int main()
 {
     vector<Pixel> image(WIDTH * HEIGHT);
 
-    vector<Pixel> blurred(WIDTH * HEIGHT);
+    cout << "===== STATIC =====\n";
 
-    cout << "Generando Mandelbrot...\n";
+    generateMandelbrot(
+        image,
+        omp_sched_static,
+        1,
+        "static"
+    );
 
-    generateMandelbrot(image);
+    generateMandelbrot(
+        image,
+        omp_sched_static,
+        16,
+        "static"
+    );
 
-    cout << "Aplicando filtro Gaussiano...\n";
+    generateMandelbrot(
+        image,
+        omp_sched_static,
+        64,
+        "static"
+    );
 
-    gaussianBlur(image, blurred);
+    cout << "\n===== DYNAMIC =====\n";
 
-    cout << "Guardando imagen...\n";
+    generateMandelbrot(
+        image,
+        omp_sched_dynamic,
+        1,
+        "dynamic"
+    );
 
-    savePPM("mandelbrot_openmp.ppm", blurred);
+    generateMandelbrot(
+        image,
+        omp_sched_dynamic,
+        16,
+        "dynamic"
+    );
 
-    cout << "Proceso terminado\n";
+    generateMandelbrot(
+        image,
+        omp_sched_dynamic,
+        64,
+        "dynamic"
+    );
+
+    cout << "\n===== GUIDED =====\n";
+
+    generateMandelbrot(
+        image,
+        omp_sched_guided,
+        1,
+        "guided"
+    );
+
+    generateMandelbrot(
+        image,
+        omp_sched_guided,
+        16,
+        "guided"
+    );
+
+    generateMandelbrot(
+        image,
+        omp_sched_guided,
+        64,
+        "guided"
+    );
+
+    // Guardar ultima imagen generada
+    savePPM("mandelbrot.ppm", image);
 
     return 0;
 }
